@@ -21,7 +21,16 @@ class FakeElement {
   set innerHTML(v) { this._html = v; }
   get innerHTML() { return this._html; }
   set textContent(v) { this.text = v; }
-  get textContent() { return this.text; }
+  // 真实 DOM 中 textContent 由节点内容派生：去标签并还原转义
+  get textContent() {
+    if (this.text !== '') return this.text;
+    return this._html
+      .replace(/<[^>]*>/g, '')
+      .replace(/&quot;/g, '"')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&');
+  }
   addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
   dispatch(type, event = {}) { (this.listeners[type] || []).forEach((fn) => fn(event)); }
   focus() { this.focused = true; }
@@ -38,7 +47,13 @@ globalThis.document = {
 const docKeydown = (event) => (docListeners.keydown || []).forEach((fn) => fn(event));
 const docDispatch = (type, event = {}) =>
   (docListeners[type] || []).forEach((fn) => fn(event));
+// 模拟用户按 Esc 从结果视图返回编辑器（携带编辑内容）
+const backToEditor = () =>
+  docKeydown({ key: 'Escape', ctrlKey: false, metaKey: false });
 globalThis.window = { getSelection: () => ({ toString: () => '' }) };
+
+// 与真实 DOM 初始状态对齐：popup.html 中 #output 初始带 hidden 属性
+$fake('output').hidden = true;
 
 // popup.js 顶层立即绑定事件，先备好 stub 再动态 import
 await import('../popup/popup.js');
@@ -75,6 +90,7 @@ test('格式化：切换结果视图并渲染高亮 token', () => {
 });
 
 test('错误 JSON：回到编辑态并显示行列号', () => {
+  backToEditor();
   els.input.value = '{"a":1\n,"b":}';
   els.format.dispatch('click');
   assert.equal(els.output.hidden, true, '应回到编辑态');
@@ -92,6 +108,7 @@ test('压缩：输出不含换行', () => {
 });
 
 test('缩进切换后自动重跑上次格式化', () => {
+  backToEditor();
   els.input.value = '{"a":1}';
   els.format.dispatch('click');
   els.indent.value = '4';
@@ -128,6 +145,7 @@ test('Ctrl+Shift+Enter 触发压缩', () => {
 });
 
 test('空输入提示错误且不切视图', () => {
+  backToEditor();
   els.input.value = '   ';
   els.format.dispatch('click');
   assert.equal(els.output.hidden, true);
@@ -135,6 +153,7 @@ test('空输入提示错误且不切视图', () => {
 });
 
 test('结果视图无选区 Ctrl+C 复制全部结果，编辑态不拦截', () => {
+  backToEditor();
   els.indent.value = '2'; // 前序测试可能改成 4，这里重置
   els.input.value = '{"c":1}';
   els.format.dispatch('click');
@@ -150,6 +169,7 @@ test('结果视图无选区 Ctrl+C 复制全部结果，编辑态不拦截', () 
 });
 
 test('超过 512KB 跳过高亮降级纯文本', () => {
+  backToEditor();
   els.input.value = '{"data":"' + 'x'.repeat(600 * 1024) + '"}';
   els.format.dispatch('click');
   assert.equal(els.output.hidden, false, '仍应显示结果');
@@ -158,6 +178,7 @@ test('超过 512KB 跳过高亮降级纯文本', () => {
 });
 
 test('自动转义：解包字符串化 JSON 并同步编辑区', () => {
+  backToEditor();
   els.indent.value = '2';
   els.escape.value = 'auto';
   els.input.value = '"{\\"baseInfo\\":{\\"servCode\\":\\"CAR-13\\"}}"';
@@ -172,6 +193,7 @@ test('自动转义：解包字符串化 JSON 并同步编辑区', () => {
 });
 
 test('保留转义：不解包，按字面量原样输出', () => {
+  backToEditor();
   els.escape.value = 'keep';
   const escaped = '"{\\"a\\":1}"';
   els.input.value = escaped;
@@ -179,4 +201,49 @@ test('保留转义：不解包，按字面量原样输出', () => {
   assert.equal(els.input.value, escaped, '编辑区保持原样');
   assert.equal(els.output.hidden, false);
   assert.equal(stripHtml(els.outputCode.innerHTML), escaped);
+});
+
+test('结果视图可直接编辑并同步为最新来源', () => {
+  backToEditor();
+  els.indent.value = '2';
+  els.escape.value = 'auto';
+  els.input.value = '{"a":1}';
+  els.format.dispatch('click');
+  // 模拟用户在结果视图里改内容
+  els.outputCode.textContent = '{ "b" : 2 }';
+  els.outputCode.dispatch('input');
+  assert.match(els.status.text, /已编辑/, '状态应提示已编辑');
+  assert.ok(
+    stripHtml(els.outputCode.innerHTML).includes('"b"'),
+    '重新高亮应反映编辑后内容',
+  );
+});
+
+test('编辑后 Ctrl+Enter 基于结果视图文本重新格式化', () => {
+  els.outputCode.textContent = '{ "b" : 2 }';
+  els.outputCode.dispatch('input');
+  docKeydown({ ctrlKey: true, metaKey: false, key: 'Enter', shiftKey: false, preventDefault() {} });
+  // 编辑器持有编辑原文，格式化结果在结果视图
+  assert.equal(els.input.value, '{ "b" : 2 }', '编辑区应同步为编辑原文');
+  assert.equal(els.output.hidden, false);
+  assert.equal(stripHtml(els.outputCode.innerHTML), '{\n  "b": 2\n}');
+});
+
+test('编辑后复制得到编辑内容', () => {
+  els.outputCode.textContent = '{"x":9}';
+  els.outputCode.dispatch('input');
+  let copied = null;
+  const ev = { preventDefault() {}, clipboardData: { setData: (t, v) => (copied = v) } };
+  docDispatch('copy', ev);
+  assert.equal(copied, '{"x":9}');
+});
+
+test('Esc 返回编辑器时携带结果视图的编辑内容', () => {
+  backToEditor();
+  els.input.value = '{"a":1}';
+  els.format.dispatch('click');
+  els.outputCode.textContent = '{"edited":true}';
+  docKeydown({ key: 'Escape', ctrlKey: false, metaKey: false });
+  assert.equal(els.input.hidden, false);
+  assert.equal(els.input.value, '{"edited":true}', '编辑区应带上编辑后的文本');
 });
