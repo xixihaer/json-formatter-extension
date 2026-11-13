@@ -1,8 +1,12 @@
 // JSON 解析 / 格式化 / 错误定位 / 统计的纯函数封装。无 DOM、无 chrome API。
 
+// 缩进参数（'2' | '4' | 'tab'）→ JSON.stringify 的 indent 实参
+export function indentUnit(indent = 2) {
+  return indent === 'tab' ? '\t' : Number(indent) || 2;
+}
+
 export function formatJson(text, indent = 2) {
-  const unit = indent === 'tab' ? '\t' : Number(indent) || 2;
-  return JSON.stringify(JSON.parse(text), null, unit);
+  return JSON.stringify(JSON.parse(text), null, indentUnit(indent));
 }
 
 export function minifyJson(text) {
@@ -17,9 +21,11 @@ export function positionToLineCol(text, pos) {
 
 export function describeJsonError(text, err) {
   const message = err && err.message ? err.message : String(err);
-  let m = message.match(/line (\d+) column (\d+)/i);
+  // V8 位置信息永远位于消息尾部；锚定尾部可避免新版 V8 消息中嵌入的
+  // 用户原文片段（如 "position 5"）劫持位置提取。
+  let m = message.match(/ \(line (\d+) column (\d+)\)$/);
   if (m) return { message, line: Number(m[1]), col: Number(m[2]) };
-  m = message.match(/position (\d+)/i);
+  m = message.match(/at position (\d+)$/);
   if (m) {
     const { line, col } = positionToLineCol(text, Number(m[1]));
     return { message, line, col };
@@ -56,11 +62,10 @@ export function scanJsonError(text) {
         if (esc === 'u') {
           if (!/^[0-9a-fA-F]{4}/.test(text.slice(i + 2, i + 6))) return false;
           i += 6;
-        } else if ('"\\/bfnrt'.includes(esc)) {
-          if (esc === undefined) return false;
+        } else if (esc !== undefined && '"\\/bfnrt'.includes(esc)) {
           i += 2;
         } else {
-          return false; // 非法转义，位置停在反斜杠处
+          return false; // 非法转义或末尾孤立反斜杠，位置停在反斜杠处
         }
         continue;
       }
@@ -128,7 +133,7 @@ export function scanJsonError(text) {
 }
 
 export function countNodes(value, depth = 0) {
-  if (depth > 64) return 1;
+  if (depth > 1000) return 1; // 与 V8 JSON.parse 可解析深度同量级，防栈溢出
   if (Array.isArray(value)) {
     return value.reduce((sum, v) => sum + countNodes(v, depth + 1), 1);
   }

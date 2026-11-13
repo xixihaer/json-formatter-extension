@@ -33,6 +33,11 @@ Chrome / Edge（Manifest V3）弹窗插件：点击图标 → 粘贴 JSON → �
 - 跑测试：`npm test`（Node ≥ 18，零依赖，`node --test`）
 - 重新生成图标：`npm run icons`
 
+## 已知限制
+
+- 错误定位的兜底扫描器（`scanJsonError`）在极端边界（罕见转义序列、超深嵌套等）给出的行列号可能与引擎略有偏差，仅影响错误提示精度，不影响格式化/压缩结果的正确性
+- 统计的节点数在超过 1000 层嵌套时不再继续深入（防栈溢出）
+
 ## 目录
 
 - `popup/highlighter.js` — JSON tokenizer 高亮（纯函数）

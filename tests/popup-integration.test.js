@@ -36,6 +36,8 @@ globalThis.document = {
   addEventListener: (t, fn) => (docListeners[t] ??= []).push(fn),
 };
 const docKeydown = (event) => (docListeners.keydown || []).forEach((fn) => fn(event));
+const docDispatch = (type, event = {}) =>
+  (docListeners[type] || []).forEach((fn) => fn(event));
 globalThis.window = { getSelection: () => ({ toString: () => '' }) };
 
 // popup.js 顶层立即绑定事件，先备好 stub 再动态 import
@@ -129,4 +131,27 @@ test('空输入提示错误且不切视图', () => {
   els.format.dispatch('click');
   assert.equal(els.output.hidden, true);
   assert.equal(els.status.text, '请先粘贴 JSON');
+});
+
+test('结果视图无选区 Ctrl+C 复制全部结果，编辑态不拦截', () => {
+  els.indent.value = '2'; // 前序测试可能改成 4，这里重置
+  els.input.value = '{"c":1}';
+  els.format.dispatch('click');
+  let copied = null;
+  const ev = { preventDefault() {}, clipboardData: { setData: (t, v) => (copied = v) } };
+  docDispatch('copy', ev);
+  assert.equal(copied, '{\n  "c": 1\n}', '结果视图应复制全部结果');
+  // 回编辑态后不应拦截原生复制
+  docKeydown({ key: 'Escape', ctrlKey: false, metaKey: false });
+  copied = null;
+  docDispatch('copy', ev);
+  assert.equal(copied, null, '编辑态不拦截 copy 事件');
+});
+
+test('超过 512KB 跳过高亮降级纯文本', () => {
+  els.input.value = '{"data":"' + 'x'.repeat(600 * 1024) + '"}';
+  els.format.dispatch('click');
+  assert.equal(els.output.hidden, false, '仍应显示结果');
+  assert.ok(!els.outputCode.innerHTML.includes('<span'), '不应有高亮 span');
+  assert.match(els.status.text, /跳过高亮/);
 });

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   formatJson, minifyJson, positionToLineCol, describeJsonError, countNodes,
-  scanJsonError,
+  scanJsonError, indentUnit,
 } from '../popup/json-ops.js';
 
 test('formatJson 支持 2/4 空格与 Tab', () => {
@@ -67,6 +67,32 @@ test('describeJsonError 新版 V8 无位置信息时用扫描器定位', () => {
   const info = describeJsonError('{"a":1\n,"b":}', err);
   assert.equal(info.line, 2);
   assert.equal(info.col, 6);
+});
+
+test('describeJsonError 不被消息中嵌入的原文劫持位置', () => {
+  // 新版 V8 会把用户原文片段嵌进消息；原文含 "position 5" 等字样时不得劫持提取
+  const err1 = new SyntaxError('Unexpected token \'p\', "nope position 5" is not valid JSON');
+  const info1 = describeJsonError('nope position 5', err1);
+  assert.equal(info1.line, 1);
+  assert.equal(info1.col, 1);
+
+  const err2 = new SyntaxError('Unexpected token \']\', "[1,] line 2 column 3" is not valid JSON');
+  const info2 = describeJsonError('[1,] line 2 column 3', err2);
+  assert.equal(info2.line, 1);
+  assert.equal(info2.col, 4);
+});
+
+test('indentUnit 解析缩进参数', () => {
+  assert.equal(indentUnit('2'), 2);
+  assert.equal(indentUnit('4'), 4);
+  assert.equal(indentUnit('tab'), '\t');
+  assert.equal(indentUnit(''), 2);
+});
+
+test('countNodes 支持深层嵌套', () => {
+  let deep = 1;
+  for (let i = 0; i < 70; i++) deep = { a: deep };
+  assert.equal(countNodes(deep), 71);
 });
 
 test('countNodes 统计嵌套节点数', () => {

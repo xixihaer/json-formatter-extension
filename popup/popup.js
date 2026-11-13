@@ -2,7 +2,9 @@
 // 注意：textarea 永远不被覆盖（只隐藏），出错的原文始终保留。
 
 import { highlightJSON, escapeHtml } from './highlighter.js';
-import { formatJson, minifyJson, describeJsonError, countNodes } from './json-ops.js';
+import {
+  indentUnit, describeJsonError, countNodes,
+} from './json-ops.js';
 
 const HIGHLIGHT_LIMIT = 512 * 1024; // 512KB 以上跳过高亮，避免大 JSON 卡顿
 
@@ -54,15 +56,18 @@ function run(action) {
   }
   state.lastAction = action;
   try {
+    const obj = JSON.parse(text); // 只解析一次，结果复用（统计/高亮/输出）
     const out =
-      action === 'format' ? formatJson(text, els.indent.value) : minifyJson(text);
+      action === 'format'
+        ? JSON.stringify(obj, null, indentUnit(els.indent.value))
+        : JSON.stringify(obj);
     state.resultText = out;
     if (out.length > HIGHLIGHT_LIMIT) {
       showResult(escapeHtml(out));
-      setStatus(`${statsLine(JSON.parse(out), out)} · 超过 512KB，跳过高亮`);
+      setStatus(`${statsLine(obj, out)} · 超过 512KB，跳过高亮`);
     } else {
       showResult(highlightJSON(out));
-      setStatus(statsLine(JSON.parse(out), out));
+      setStatus(statsLine(obj, out));
     }
   } catch (err) {
     state.resultText = '';
@@ -98,11 +103,13 @@ function clearAll() {
 }
 
 /* ---------- 偏好记忆（chrome.storage 可用时才启用，便于普通网页中调试） ---------- */
+const VALID_INDENTS = ['2', '4', 'tab'];
+
 function loadPref() {
   const api = globalThis.chrome?.storage?.sync;
   if (!api) return;
   api.get(['indent'], ({ indent } = {}) => {
-    if (indent) els.indent.value = indent;
+    if (VALID_INDENTS.includes(indent)) els.indent.value = indent;
   });
 }
 
@@ -132,10 +139,12 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// 结果视图无选区时，Ctrl/Cmd+C 复制全部结果
-els.output.addEventListener('copy', (e) => {
+// 结果视图可见且无选区时，Ctrl/Cmd+C 复制全部结果。
+// copy 事件按规范派发到焦点元素，必须挂 document 级才能稳定捕获。
+document.addEventListener('copy', (e) => {
+  if (els.output.hidden) return; // 编辑态不拦截，保留原生复制
   const sel = window.getSelection();
-  if (sel && String(sel)) return;
+  if (sel && String(sel)) return; // 有选区时走默认选区复制
   e.preventDefault();
   e.clipboardData.setData('text/plain', state.resultText || els.input.value);
   setStatus('已复制');
