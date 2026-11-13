@@ -7,7 +7,7 @@
 </head>
 <body>
   <header class="toolbar">
-    <span class="brand">{&nbsp;}&nbsp;JSON 格式化</span>
+    <span class="brand">{&nbsp;}&nbsp;JSON</span>
     <span class="actions">
       <button id="btn-format" title="格式化 (Ctrl+Enter)">格式化</button>
       <button id="btn-minify" title="压缩 (Ctrl+Shift+Enter)">压缩</button>
@@ -17,6 +17,10 @@
         <option value="2">2 空格</option>
         <option value="4">4 空格</option>
         <option value="tab">Tab</option>
+      </select>
+      <select id="sel-escape" title="转义处理：对从日志等处拷来的字符串化 JSON（外层引号+内部转义）是否自动解包">
+        <option value="auto">自动转义</option>
+        <option value="keep">保留转义</option>
       </select>
     </span>
   </header>

@@ -52,6 +52,7 @@ const els = {
   minify: $fake('btn-minify'),
   clear: $fake('btn-clear'),
   indent: $fake('sel-indent'),
+  escape: $fake('sel-escape'),
 };
 
 // 高亮输出去掉 span 并还原转义后，应与纯文本一致
@@ -154,4 +155,28 @@ test('超过 512KB 跳过高亮降级纯文本', () => {
   assert.equal(els.output.hidden, false, '仍应显示结果');
   assert.ok(!els.outputCode.innerHTML.includes('<span'), '不应有高亮 span');
   assert.match(els.status.text, /跳过高亮/);
+});
+
+test('自动转义：解包字符串化 JSON 并同步编辑区', () => {
+  els.indent.value = '2';
+  els.escape.value = 'auto';
+  els.input.value = '"{\\"baseInfo\\":{\\"servCode\\":\\"CAR-13\\"}}"';
+  els.format.dispatch('click');
+  assert.equal(els.input.value, '{"baseInfo":{"servCode":"CAR-13"}}', '编辑区应为解包后文本');
+  assert.equal(els.output.hidden, false);
+  assert.match(els.status.text, /已自动去除转义/);
+  assert.ok(
+    stripHtml(els.outputCode.innerHTML).startsWith('{\n  "baseInfo"'),
+    '应格式化解包后的 JSON',
+  );
+});
+
+test('保留转义：不解包，按字面量原样输出', () => {
+  els.escape.value = 'keep';
+  const escaped = '"{\\"a\\":1}"';
+  els.input.value = escaped;
+  els.format.dispatch('click');
+  assert.equal(els.input.value, escaped, '编辑区保持原样');
+  assert.equal(els.output.hidden, false);
+  assert.equal(stripHtml(els.outputCode.innerHTML), escaped);
 });

@@ -1,5 +1,36 @@
 // JSON 解析 / 格式化 / 错误定位 / 统计的纯函数封装。无 DOM、无 chrome API。
 
+// 解包「字符串化的 JSON」：输入形如 "{\"a\":1}"（外层引号 + 内部转义，
+// 常见于日志/Java 拷出的报文）时返回内层真实 JSON 文本；其余情况原样返回。
+// 仅当解出的内层是以 { 或 [ 开头的合法 JSON 才解包，避免误伤普通字符串值；
+// 支持多重转义，最多解 3 层。
+export function unwrapEscapedJson(text) {
+  let cur = text.trim();
+  for (let depth = 0; depth < 3; depth++) {
+    if (!(cur.startsWith('"') && cur.endsWith('"') && cur.length >= 2)) break;
+    let inner;
+    try {
+      inner = JSON.parse(cur);
+    } catch {
+      break;
+    }
+    if (typeof inner !== 'string') break;
+    const t = inner.trim();
+    if (t.startsWith('"')) {
+      cur = t; // 中间结果仍是字面量 → 多重转义，下一轮继续解
+      continue;
+    }
+    if (!(t.startsWith('{') || t.startsWith('['))) break;
+    try {
+      JSON.parse(t); // 内层必须是合法 JSON 才值得解包
+    } catch {
+      break;
+    }
+    cur = t;
+  }
+  return cur;
+}
+
 // 缩进参数（'2' | '4' | 'tab'）→ JSON.stringify 的 indent 实参
 export function indentUnit(indent = 2) {
   return indent === 'tab' ? '\t' : Number(indent) || 2;

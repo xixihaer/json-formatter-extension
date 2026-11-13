@@ -3,7 +3,7 @@
 
 import { highlightJSON, escapeHtml } from './highlighter.js';
 import {
-  indentUnit, describeJsonError, countNodes,
+  indentUnit, describeJsonError, countNodes, unwrapEscapedJson,
 } from './json-ops.js';
 
 const HIGHLIGHT_LIMIT = 512 * 1024; // 512KB 以上跳过高亮，避免大 JSON 卡顿
@@ -19,6 +19,7 @@ const els = {
   copy: $('btn-copy'),
   clear: $('btn-clear'),
   indent: $('sel-indent'),
+  escape: $('sel-escape'),
 };
 
 const state = {
@@ -48,11 +49,22 @@ function statsLine(parsed, text) {
 }
 
 function run(action) {
-  const text = els.input.value;
+  let text = els.input.value;
   if (!text.trim()) {
     showEditor();
     setStatus('请先粘贴 JSON', true);
     return;
+  }
+  // 自动转义：解包「字符串化的 JSON」（外层引号 + 内部转义），
+  // 解包成功后同步编辑区，使错误定位/再次编辑基于真实报文。
+  let unwrapped = false;
+  if (els.escape.value === 'auto') {
+    const source = unwrapEscapedJson(text);
+    if (source !== text) {
+      text = source;
+      els.input.value = source;
+      unwrapped = true;
+    }
   }
   state.lastAction = action;
   try {
@@ -62,12 +74,13 @@ function run(action) {
         ? JSON.stringify(obj, null, indentUnit(els.indent.value))
         : JSON.stringify(obj);
     state.resultText = out;
+    const note = unwrapped ? ' · 已自动去除转义' : '';
     if (out.length > HIGHLIGHT_LIMIT) {
       showResult(escapeHtml(out));
-      setStatus(`${statsLine(obj, out)} · 超过 512KB，跳过高亮`);
+      setStatus(`${statsLine(obj, out)} · 超过 512KB，跳过高亮${note}`);
     } else {
       showResult(highlightJSON(out));
-      setStatus(statsLine(obj, out));
+      setStatus(statsLine(obj, out) + note);
     }
   } catch (err) {
     state.resultText = '';
@@ -104,18 +117,20 @@ function clearAll() {
 
 /* ---------- 偏好记忆（chrome.storage 可用时才启用，便于普通网页中调试） ---------- */
 const VALID_INDENTS = ['2', '4', 'tab'];
+const VALID_ESCAPES = ['auto', 'keep'];
 
 function loadPref() {
   const api = globalThis.chrome?.storage?.sync;
   if (!api) return;
-  api.get(['indent'], ({ indent } = {}) => {
-    if (VALID_INDENTS.includes(indent)) els.indent.value = indent;
+  api.get(['indent', 'escape'], (prefs = {}) => {
+    if (VALID_INDENTS.includes(prefs.indent)) els.indent.value = prefs.indent;
+    if (VALID_ESCAPES.includes(prefs.escape)) els.escape.value = prefs.escape;
   });
 }
 
 function savePref() {
   const api = globalThis.chrome?.storage?.sync;
-  if (api) api.set({ indent: els.indent.value });
+  if (api) api.set({ indent: els.indent.value, escape: els.escape.value });
 }
 
 /* ---------- 事件绑定 ---------- */
@@ -128,6 +143,9 @@ els.indent.addEventListener('change', () => {
   savePref();
   if (state.lastAction && state.resultText) run(state.lastAction);
 });
+
+// 转义模式只影响下一次解析的输入预处理，不自动重跑（当前内容已是处理后的）
+els.escape.addEventListener('change', savePref);
 
 document.addEventListener('keydown', (e) => {
   const mod = e.ctrlKey || e.metaKey;

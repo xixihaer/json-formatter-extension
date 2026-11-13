@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   formatJson, minifyJson, positionToLineCol, describeJsonError, countNodes,
-  scanJsonError, indentUnit,
+  scanJsonError, indentUnit, unwrapEscapedJson,
 } from '../popup/json-ops.js';
 
 test('formatJson 支持 2/4 空格与 Tab', () => {
@@ -93,6 +93,32 @@ test('countNodes 支持深层嵌套', () => {
   let deep = 1;
   for (let i = 0; i < 70; i++) deep = { a: deep };
   assert.equal(countNodes(deep), 71);
+});
+
+test('unwrapEscapedJson 解包字符串化的 JSON', () => {
+  // 用户真实场景：日志里拷出的转义 JSON 串（外层引号 + 内部 \" 转义）
+  const escaped = '"{\\"baseInfo\\":{\\"servCode\\":\\"CAR-13\\"},\\"data\\":[1,2]}"';
+  assert.equal(unwrapEscapedJson(escaped), '{"baseInfo":{"servCode":"CAR-13"},"data":[1,2]}');
+});
+
+test('unwrapEscapedJson 支持多重转义（最多 3 层）', () => {
+  const double = '"\\"{\\\\\\"a\\\\\\":1}\\""';
+  assert.equal(unwrapEscapedJson(double), '{"a":1}');
+});
+
+test('unwrapEscapedJson 对非转义输入原样返回', () => {
+  assert.equal(unwrapEscapedJson('{"a":1}'), '{"a":1}');
+  assert.equal(unwrapEscapedJson('  [1,2]  '), '[1,2]', 'trim 后合法数组');
+  assert.equal(unwrapEscapedJson('not json'), 'not json');
+});
+
+test('unwrapEscapedJson 不误伤普通字符串值', () => {
+  assert.equal(unwrapEscapedJson('"hello"'), '"hello"');
+  assert.equal(unwrapEscapedJson('"123"'), '"123"', '数字字符串不解包');
+});
+
+test('unwrapEscapedJson 内层非法时保持原样', () => {
+  assert.equal(unwrapEscapedJson('"{broken"'), '"{broken"');
 });
 
 test('countNodes 统计嵌套节点数', () => {
