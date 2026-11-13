@@ -25,6 +25,7 @@ const els = {
 const state = {
   resultText: '',   // 最近一次成功结果（复制用）
   lastAction: null, // 'format' | 'minify'（缩进切换后重跑用）
+  composing: false, // 中文输入法合成中，避免重渲染打断候选
 };
 
 function setStatus(text, isError = false) {
@@ -48,8 +49,77 @@ function statsLine(parsed, text) {
   return `${text.length} 字符 · ${countNodes(parsed)} 节点`;
 }
 
+/* ---------- 结果视图就地编辑 ---------- */
+// 当前生效文本：结果视图可见时以编辑后的内容为准，并同步回编辑区
+function currentText() {
+  if (!els.output.hidden) {
+    const t = els.outputCode.textContent;
+    els.input.value = t;
+    return t;
+  }
+  return els.input.value;
+}
+
+// 光标在纯文本中的偏移（基于 Range 文本长度，无需遍历 DOM）
+function caretTextOffset(root) {
+  const sel = typeof window.getSelection === 'function' && window.getSelection();
+  if (!sel || typeof sel.getRangeAt !== 'function' || sel.rangeCount === 0) return -1;
+  const r = sel.getRangeAt(0);
+  if (typeof document.createRange !== 'function') return -1;
+  const pre = document.createRange();
+  pre.selectNodeContents(root);
+  pre.setEnd(r.startContainer, r.startOffset);
+  const off = pre.toString().length;
+  if (typeof pre.detach === 'function') pre.detach();
+  return off;
+}
+
+// 在纯文本偏移处恢复光标
+function setTextCaret(root, offset) {
+  if (typeof document.createTreeWalker !== 'function') return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node;
+  let total = 0;
+  while ((node = walker.nextNode()) !== null) {
+    if (offset <= total + node.data.length) {
+      const range = document.createRange();
+      range.setStart(node, offset - total);
+      range.collapse(true);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return;
+    }
+    total += node.data.length;
+  }
+  // 偏移越界：光标置于末尾
+  const range = document.createRange();
+  range.selectNodeContents(root);
+  range.collapse(false);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+// 编辑后重新高亮并保持光标位置
+function rehighlight() {
+  const text = els.outputCode.textContent;
+  state.resultText = text;
+  const html = text.length > HIGHLIGHT_LIMIT ? escapeHtml(text) : highlightJSON(text);
+  const caret = caretTextOffset(els.outputCode);
+  els.outputCode.innerHTML = html;
+  if (caret >= 0) setTextCaret(els.outputCode, caret);
+}
+
+function handleResultInput() {
+  state.resultText = els.outputCode.textContent; // 立即同步，复制不落旧值
+  if (state.composing) return; // IME 合成中只同步文本，不重渲染
+  setStatus('已编辑 · Ctrl+Enter 重新格式化');
+  rehighlight();
+}
+
 function run(action) {
-  let text = els.input.value;
+  let text = currentText();
   if (!text.trim()) {
     showEditor();
     setStatus('请先粘贴 JSON', true);
@@ -77,10 +147,10 @@ function run(action) {
     const note = unwrapped ? ' · 已自动去除转义' : '';
     if (out.length > HIGHLIGHT_LIMIT) {
       showResult(escapeHtml(out));
-      setStatus(`${statsLine(obj, out)} · 超过 512KB，跳过高亮${note}`);
+      setStatus(`${statsLine(obj, out)} · 超过 512KB，跳过高亮${note} · 可编辑`);
     } else {
       showResult(highlightJSON(out));
-      setStatus(statsLine(obj, out) + note);
+      setStatus(`${statsLine(obj, out)}${note} · 可编辑`);
     }
   } catch (err) {
     state.resultText = '';
@@ -109,6 +179,7 @@ async function copy() {
 
 function clearAll() {
   els.input.value = '';
+  els.outputCode.innerHTML = '';
   state.resultText = '';
   state.lastAction = null;
   showEditor();
@@ -147,12 +218,42 @@ els.indent.addEventListener('change', () => {
 // 转义模式只影响下一次解析的输入预处理，不自动重跑（当前内容已是处理后的）
 els.escape.addEventListener('change', savePref);
 
+/* ---------- 结果视图就地编辑事件 ---------- */
+els.outputCode.addEventListener('input', handleResultInput);
+els.outputCode.addEventListener('compositionstart', () => {
+  state.composing = true;
+});
+els.outputCode.addEventListener('compositionend', () => {
+  state.composing = false;
+  handleResultInput();
+});
+
+// 结果视图内 Enter 插入真实换行（而非 contenteditable 的 <div>/<br>）
+els.outputCode.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+    e.preventDefault();
+    if (typeof document.execCommand === 'function') {
+      document.execCommand('insertText', false, '\n');
+    }
+  }
+});
+
+// 粘贴纯文本，避免富文本混入破坏 JSON
+els.outputCode.addEventListener('paste', (e) => {
+  e.preventDefault();
+  const text = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+  if (text && typeof document.execCommand === 'function') {
+    document.execCommand('insertText', false, text);
+  }
+});
+
 document.addEventListener('keydown', (e) => {
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.key === 'Enter') {
     e.preventDefault();
     run(e.shiftKey ? 'minify' : 'format');
   } else if (e.key === 'Escape' && !els.output.hidden) {
+    els.input.value = els.outputCode.textContent; // 携带编辑内容回编辑器
     showEditor();
   }
 });
